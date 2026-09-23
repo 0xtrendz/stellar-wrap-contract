@@ -766,34 +766,27 @@ fn test_verify_data_corrupted_payload() {
 }
 
 #[test]
-fn test_mint_rejects_signature_from_wrong_admin_pubkey() {
-    // Acceptance Criteria:
-    // - Test initializes with pubkey A and signs with key B.
-    // - The mint attempt fails.
-    // - The test verifies the failure path leaves balance and latest period untouched.
+fn test_mint_rejects_wrong_admin_pubkey() {
     let env = Env::default();
     let contract_id = env.register(StellarWrapContract, ());
     let client = StellarWrapContractClient::new(&env, &contract_id);
 
-    // Admin pubkey A
-    let admin_key_a = SigningKey::from_bytes(&[100u8; 32]);
-    let admin_pubkey_a =
-        BytesN::from_array(&env, &admin_key_a.verifying_key().to_bytes());
+    let admin_pubkey_a = BytesN::from_array(&env, &[1u8; 32]);
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
 
     env.mock_all_auths();
     client.initialize(&admin, &admin_pubkey_a);
 
-    // Sign with a different private key B
-    let signing_key_b = SigningKey::from_bytes(&[101u8; 32]);
     let archetype = symbol_short!("arch");
     let data_hash = BytesN::from_array(&env, &[42u8; 32]);
     let period = 202401u64;
 
+    // Sign with a key other than the configured admin pubkey.
+    let wrong_key = SigningKey::from_bytes(&[99u8; 32]);
     let signature = sign_payload(
         &env,
-        &signing_key_b,
+        &wrong_key,
         &contract_id,
         &user,
         period,
@@ -811,9 +804,9 @@ fn test_mint_rejects_signature_from_wrong_admin_pubkey() {
             &signature,
         );
     }));
-    assert!(result.is_err(), "mint must fail with wrong admin pubkey");
+    assert_maps_to_invalid_signature(&result);
 
-    // Verify failure path leaves balance and latest period untouched
+    // The failure path must leave balance and latest period untouched.
     assert_eq!(client.balance_of(&user), 0);
     assert!(client.get_latest_wrap(&user).is_none());
 }
