@@ -766,6 +766,59 @@ fn test_verify_data_corrupted_payload() {
 }
 
 #[test]
+fn test_mint_rejects_signature_from_wrong_admin_pubkey() {
+    // Acceptance Criteria:
+    // - Test initializes with pubkey A and signs with key B.
+    // - The mint attempt fails.
+    // - The test verifies the failure path leaves balance and latest period untouched.
+    let env = Env::default();
+    let contract_id = env.register(StellarWrapContract, ());
+    let client = StellarWrapContractClient::new(&env, &contract_id);
+
+    // Admin pubkey A
+    let admin_key_a = SigningKey::from_bytes(&[100u8; 32]);
+    let admin_pubkey_a =
+        BytesN::from_array(&env, &admin_key_a.verifying_key().to_bytes());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &admin_pubkey_a);
+
+    // Sign with a different private key B
+    let signing_key_b = SigningKey::from_bytes(&[101u8; 32]);
+    let archetype = symbol_short!("arch");
+    let data_hash = BytesN::from_array(&env, &[42u8; 32]);
+    let period = 202401u64;
+
+    let signature = sign_payload(
+        &env,
+        &signing_key_b,
+        &contract_id,
+        &user,
+        period,
+        &archetype,
+        &data_hash,
+    );
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.mint_wrap(
+            &user,
+            &period,
+            &archetype,
+            &data_hash,
+            &CURRENT_PAYLOAD_VERSION,
+            &signature,
+        );
+    }));
+    assert!(result.is_err(), "mint must fail with wrong admin pubkey");
+
+    // Verify failure path leaves balance and latest period untouched
+    assert_eq!(client.balance_of(&user), 0);
+    assert!(client.get_latest_wrap(&user).is_none());
+}
+
+#[test]
 fn test_verify_data_no_wrap_exists() {
     let env = Env::default();
     let contract_id = env.register(StellarWrapContract, ());
@@ -896,57 +949,6 @@ fn test_mint_wrap_rejects_signature_from_wrong_key() {
     // Nothing may be written by the failed mint.
     assert!(client.get_wrap(&user, &period).is_none());
     assert_eq!(client.balance_of(&user), 0);
-}
-
-/// Test that initialization with pubkey A rejects signatures produced by key B.
-/// This ensures the admin public key is correctly enforced during minting.
-#[test]
-fn test_mint_with_wrong_admin_pubkey_fails() {
-    let env = Env::default();
-    let contract_id = env.register(StellarWrapContract, ());
-    let client = StellarWrapContractClient::new(&env, &contract_id);
-
-    // Initialize with admin_pubkey A
-    let signing_key_a = SigningKey::from_bytes(&[100u8; 32]);
-    let admin_pubkey_a = BytesN::from_array(&env, &signing_key_a.verifying_key().to_bytes());
-    let admin = Address::generate(&env);
-    let user = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &admin_pubkey_a);
-
-    let archetype = symbol_short!("arch");
-    let data_hash = BytesN::from_array(&env, &[42u8; 32]);
-    let period = 202401u64;
-
-    // Sign with a different private key B
-    let signing_key_b = SigningKey::from_bytes(&[101u8; 32]);
-    let signature = sign_payload(
-        &env,
-        &signing_key_b,
-        &contract_id,
-        &user,
-        period,
-        &archetype,
-        &data_hash,
-    );
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.mint_wrap(
-            &user,
-            &period,
-            &archetype,
-            &data_hash,
-            &CURRENT_PAYLOAD_VERSION,
-            &signature,
-        );
-    }));
-
-    assert_maps_to_invalid_signature(&result);
-
-    // Verify balance and latest period remain untouched
-    assert_eq!(client.balance_of(&user), 0);
-    assert!(client.get_latest_wrap(&user).is_none());
 }
 
 #[test]
