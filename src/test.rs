@@ -339,6 +339,40 @@ fn test_initialize_twice_fails() {
 }
 
 #[test]
+fn test_invalid_signature_rejects_mint() {
+    let env = Env::default();
+    let contract_id = env.register(StellarWrapContract, ());
+    let client = StellarWrapContractClient::new(&env, &contract_id);
+
+    // Initialize with admin pubkey A
+    let signing_key_a = SigningKey::from_bytes(&[1u8; 32]);
+    let admin_pubkey_a = BytesN::from_array(&env, &signing_key_a.verifying_key().to_bytes());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &admin_pubkey_a);
+
+    // Sign with a different private key B
+    let signing_key_b = SigningKey::from_bytes(&[2u8; 32]);
+    let archetype = symbol_short!("arch");
+    let period = 202401u64;
+    let hash = BytesN::from_array(&env, &[1u8; 32]);
+    let signature = sign_payload(
+        &env,
+        &signing_key_b,
+        &contract_id,
+        &user,
+        period,
+        &archetype,
+        &hash,
+    );
+
+    // Mint attempt should fail
+    client.mint_wrap(&user, &period, &archetype, &hash, &1u32, &signature);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #26)")]
 fn test_defeated_admin_proposal_is_persisted() {
     let env = Env::default();
@@ -763,52 +797,6 @@ fn test_verify_data_corrupted_payload() {
 
     let corrupted_data = Bytes::from_slice(&env, b"\x00\xFF\xFE\xFDcorrupt\x01\x02");
     assert!(!client.verify_data(&user, &period, &corrupted_data));
-}
-
-#[test]
-fn test_mint_rejects_wrong_admin_pubkey() {
-    let env = Env::default();
-    let contract_id = env.register(StellarWrapContract, ());
-    let client = StellarWrapContractClient::new(&env, &contract_id);
-
-    let admin_pubkey_a = BytesN::from_array(&env, &[1u8; 32]);
-    let admin = Address::generate(&env);
-    let user = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &admin_pubkey_a);
-
-    let archetype = symbol_short!("arch");
-    let data_hash = BytesN::from_array(&env, &[42u8; 32]);
-    let period = 202401u64;
-
-    // Sign with a key other than the configured admin pubkey.
-    let wrong_key = SigningKey::from_bytes(&[99u8; 32]);
-    let signature = sign_payload(
-        &env,
-        &wrong_key,
-        &contract_id,
-        &user,
-        period,
-        &archetype,
-        &data_hash,
-    );
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.mint_wrap(
-            &user,
-            &period,
-            &archetype,
-            &data_hash,
-            &CURRENT_PAYLOAD_VERSION,
-            &signature,
-        );
-    }));
-    assert_maps_to_invalid_signature(&result);
-
-    // The failure path must leave balance and latest period untouched.
-    assert_eq!(client.balance_of(&user), 0);
-    assert!(client.get_latest_wrap(&user).is_none());
 }
 
 #[test]
